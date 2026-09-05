@@ -29,7 +29,7 @@ def clahe(img, clip=2.0, grid=(8,8)):
     return cv2.createCLAHE(clip, grid).apply(u8).astype(np.float32) / 255.0
 
 def tda_features(patch):
-    """4 TDA features via GUDHI cubical persistent homology: H0/H1 entropy + total persistence."""
+    """4 TDA features via GUDHI cubical persistent homology."""
     p = patch.astype(np.float64)
     cc = gudhi.CubicalComplex(dimensions=p.shape, top_dimensional_cells=p.flatten())
     pers = cc.persistence(min_persistence=0.001)
@@ -44,7 +44,7 @@ def tda_features(patch):
     return torch.tensor(feats, dtype=torch.float32)
 
 def img_to_graph(img, label, pid_str, ps=128, ts=1024):
-    """Full pipeline: resize -> mask -> CLAHE -> patches -> TDA -> spatial+topo edges -> PyG Data."""
+    """Full pipeline: resize -> mask -> CLAHE -> patches -> TDA -> edges -> PyG Data."""
     ir = resize_pad(img, ts); mask = breast_mask(ir)
     ic = clahe(ir); it = np.clip(ir / max(ir.max(), 1), 0, 1.0)
     stride = ps // 2; H, W = ic.shape
@@ -60,22 +60,19 @@ def img_to_graph(img, label, pid_str, ps=128, ts=1024):
     pos = np.array(co); topo = torch.stack(pt).numpy()
     tree = cKDTree(pos)
     _, sp_idx = tree.query(pos, k=min(SPATIAL_K+1, n))
-    sp_edges = set()
+    sp = set()
     for i, nb in enumerate(sp_idx):
         for j in nb:
-            if i != j: sp_edges.add((i, j))
-    topo_norm = topo / (np.linalg.norm(topo, axis=1, keepdims=True) + 1e-10)
-    topo_sim = topo_norm @ topo_norm.T
-    topo_edges = set()
+            if i != j: sp.add((i, j))
+    tn = topo / (np.linalg.norm(topo, axis=1, keepdims=True) + 1e-10)
+    ts2 = tn @ tn.T; te = set()
     for i in range(n):
-        sims = topo_sim[i].copy(); sims[i] = -1
-        for j in np.argsort(sims)[-TOPO_K:]:
-            if sims[j] >= TOPO_EDGE_THRESH: topo_edges.add((i,j)); topo_edges.add((j,i))
-    all_edges = sp_edges | topo_edges
-    if not all_edges: return None
+        s = ts2[i].copy(); s[i] = -1
+        for j in np.argsort(s)[-TOPO_K:]:
+            if s[j] >= TOPO_EDGE_THRESH: te.add((i,j)); te.add((j,i))
+    ae = sp | te
+    if not ae: return None
     return Data(x=torch.stack(pc).float(), topo=torch.stack(pt).float(),
-        edge_index=torch.tensor(list(all_edges)).t().contiguous(),
+        edge_index=torch.tensor(list(ae)).t().contiguous(),
         y=torch.tensor([label]),
-        pid_hash=torch.tensor(hash(pid_str) % (2**62), dtype=torch.long),
-        n_spatial=torch.tensor(len(sp_edges)),
-        n_topo_new=torch.tensor(len(topo_edges - sp_edges)))
+        pid_hash=torch.tensor(hash(pid_str) % (2**62), dtype=torch.long))

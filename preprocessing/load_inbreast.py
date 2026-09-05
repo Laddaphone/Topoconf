@@ -1,7 +1,6 @@
 """Load INbreast from DICOM with orientation normalization."""
-import pydicom, numpy as np, torch
+import pydicom, numpy as np, torch, pandas as pd
 from pathlib import Path
-import pandas as pd
 from .pipeline import img_to_graph
 
 def load_inbreast(dicom_dir, xls_path, cache_dir, ps=128, ts=1024):
@@ -15,7 +14,7 @@ def load_inbreast(dicom_dir, xls_path, cache_dir, ps=128, ts=1024):
         else: continue
         try: fn = str(int(float(r.get('File Name', ''))))
         except: fn = str(r.get('File Name', '')).strip().split('.')[0]
-        lmap[fn] = {'label': lab, 'pid': fn, 'birads': br}
+        lmap[fn] = {'label': lab, 'pid': fn}
     cached = {p.stem for p in cache_dir.glob('*.pt')}; new = 0
     for path in sorted(Path(dicom_dir).glob('*.dcm')):
         prefix = path.stem.split('_')[0]
@@ -29,11 +28,9 @@ def load_inbreast(dicom_dir, xls_path, cache_dir, ps=128, ts=1024):
         try:
             ds = pydicom.dcmread(path)
             img = ds.pixel_array.astype(np.float32)
-            bits = ds.get('BitsStored', 14); mx = float(2**bits - 1)
+            mx = float(2**ds.get('BitsStored', 14) - 1)
             if ds.get('PhotometricInterpretation') == 'MONOCHROME1': img = mx - img
             g = img_to_graph(img, info['label'], info['pid'], ps, ts)
             if g: torch.save(g, cache_dir / f'{fid}.pt'); new += 1
         except: pass
-    total = list(cache_dir.glob('*.pt'))
-    print(f'INbreast: {len(total)} graphs ({new} new)')
-    return sorted(total)
+    print(f'INbreast: {len(list(cache_dir.glob("*.pt")))} graphs ({new} new)')
